@@ -257,6 +257,27 @@ impl Expr {
     }
 }
 
+impl std::ops::BitAnd for Expr {
+    type Output = Expr;
+    fn bitand(self, rhs: Expr) -> Expr {
+        self.and(rhs)
+    }
+}
+
+impl std::ops::BitOr for Expr {
+    type Output = Expr;
+    fn bitor(self, rhs: Expr) -> Expr {
+        self.or(rhs)
+    }
+}
+
+impl std::ops::Not for Expr {
+    type Output = Expr;
+    fn not(self) -> Expr {
+        Expr::Not(Box::new(self))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

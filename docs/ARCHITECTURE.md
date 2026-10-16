@@ -218,8 +218,12 @@ modified for locking.
 ## Embed sync (D6, D10)
 
 An embed keeps a copy of selected target fields on the referencing document:
-an object for a `belongs_to`, or an array of `{_id, ...}` for a local-array
-`many_to_many`. The layer fills the copy synchronously on insert, and on any
+an object for a `belongs_to`, or an array of objects for a local-array
+`many_to_many`. Every copy includes the target's `_id`, so it can be found
+from a delete event, which carries only the `_id` (no pre-image needed). The
+layer indexes `<into>._id` for this. An embed may not copy another embed's
+snapshot, because chained copies would let the worker's own writes trigger
+more syncs. The layer fills the copy synchronously on insert, and on any
 update that changes the FK. A background worker then keeps the copies
 up to date:
 
@@ -250,6 +254,20 @@ Auth: `Authorization: Bearer <key>` (HTTP) or the `authorization` metadata key
 (gRPC). Keys are configured as SHA-256 hashes, so plaintext keys are never
 stored. A key can be read-only, read-write, or admin (admin is needed for
 schema changes).
+
+## Known limitations (first milestone)
+
+* No upserts. Updates are operator-style only (no replacement documents and
+  no pipeline updates).
+* No sorting by related fields and no aggregations (`GROUP BY`, relation
+  counts) yet.
+* A junction include applies its per-parent `limit` in memory after fetching
+  all linked targets for the chunk.
+* Large cascades run inside one transaction, so MongoDB's transaction limits
+  apply (60 s lifetime by default, 16 MB oplog entry per transaction).
+* Strict-integrity guarantees cover writes made through the server. Direct
+  writes are type-checked by `$jsonSchema`, but FK existence is not checked
+  for them.
 
 ## Requirements
 

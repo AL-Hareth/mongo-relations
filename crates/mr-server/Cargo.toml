@@ -1,0 +1,45 @@
+[package]
+name = "mr-server"
+description = "mongo-relations server: gRPC + HTTP/JSON front-ends over the relational engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mongo-relations"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mr-core.workspace = true
+mr-engine.workspace = true
+mr-proto.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+bson.workspace = true
+bytes.workspace = true
+clap.workspace = true
+futures.workspace = true
+hex.workspace = true
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+toml.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+mr-client.workspace = true
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
+mongodb.workspace = true
+
+[lints]
+workspace = true

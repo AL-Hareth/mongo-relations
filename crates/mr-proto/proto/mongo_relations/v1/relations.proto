@@ -1,0 +1,362 @@
+// mongo-relations gRPC API, version 1.
+//
+// Encoding conventions:
+// * Documents (rows, update specs, raw filters, explain output) are raw BSON
+//   documents in `bytes` fields.
+// * Single BSON values (comparison operands, ids) are wrapped in a BSON
+//   document `{ "v": <value> }`, because BSON's top level must be a document.
+// * Authentication: send `authorization: Bearer <api-key>` metadata.
+syntax = "proto3";
+
+package mongo_relations.v1;
+
+// Data access: queries and writes.
+service RelationsService {
+  // Run a query; results stream back in chunks.
+  rpc Query(QueryRequest) returns (stream QueryResponse);
+  rpc Count(CountRequest) returns (CountResponse);
+  // Describe how a query would execute.
+  rpc Explain(QueryRequest) returns (ExplainResponse);
+  // Execute write operations atomically.
+  rpc Write(WriteRequest) returns (WriteResponse);
+}
+
+// Administration: schema management and server information.
+service AdminService {
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+  rpc ApplySchema(ApplySchemaRequest) returns (ApplySchemaResponse);
+  rpc SchemaHistory(SchemaHistoryRequest) returns (SchemaHistoryResponse);
+  rpc RebuildEmbeds(RebuildEmbedsRequest) returns (RebuildEmbedsResponse);
+  rpc ServerInfo(ServerInfoRequest) returns (ServerInfoResponse);
+}
+
+// ---------------------------------------------------------------- schema
+
+message Schema {
+  repeated Collection collections = 1;
+}
+
+message Collection {
+  string name = 1;
+  repeated Field fields = 2;
+  repeated Relation relations = 3;
+}
+
+message Field {
+  string name = 1;
+  FieldType type = 2;
+  bool required = 3;
+  bool nullable = 4;
+  bool unique = 5;
+}
+
+message FieldType {
+  oneof kind {
+    Scalar scalar = 1;
+    FieldType array = 2;
+    ObjectType object = 3;
+  }
+}
+
+enum Scalar {
+  SCALAR_UNSPECIFIED = 0;
+  SCALAR_OBJECT_ID = 1;
+  SCALAR_STRING = 2;
+  SCALAR_INT = 3;
+  SCALAR_LONG = 4;
+  SCALAR_DOUBLE = 5;
+  SCALAR_DECIMAL = 6;
+  SCALAR_NUMBER = 7;
+  SCALAR_BOOL = 8;
+  SCALAR_DATE = 9;
+  SCALAR_BINARY = 10;
+  SCALAR_UUID = 11;
+  SCALAR_ANY = 12;
+}
+
+message ObjectType {
+  repeated Field fields = 1;
+}
+
+message Relation {
+  string name = 1;
+  string target = 2;
+  oneof kind {
+    ForeignKey belongs_to = 3;
+    ForeignKey has_one = 4;
+    ForeignKey has_many = 5;
+    ManyToMany many_to_many = 6;
+  }
+  Integrity integrity = 7;
+  OnDelete on_delete = 8;
+  optional Embed embed = 9;
+}
+
+message ForeignKey {
+  string foreign_key = 1;
+  // Referenced key; empty means `_id`.
+  string references = 2;
+}
+
+message ManyToMany {
+  oneof via {
+    // Array of target keys on this collection.
+    string local = 1;
+    // Array of this collection's keys on the target.
+    string remote = 2;
+    Junction junction = 3;
+  }
+  // Referenced key; empty means `_id`.
+  string references = 4;
+}
+
+message Junction {
+  string collection = 1;
+  string local_key = 2;
+  string target_key = 3;
+}
+
+enum Integrity {
+  // Defaults to strict, or to the other side's setting.
+  INTEGRITY_UNSPECIFIED = 0;
+  INTEGRITY_STRICT = 1;
+  INTEGRITY_LOOSE = 2;
+}
+
+enum OnDelete {
+  ON_DELETE_UNSPECIFIED = 0;
+  ON_DELETE_RESTRICT = 1;
+  ON_DELETE_CASCADE = 2;
+  ON_DELETE_SET_NULL = 3;
+  ON_DELETE_NO_ACTION = 4;
+}
+
+message Embed {
+  repeated string fields = 1;
+  string into = 2;
+}
+
+// ----------------------------------------------------------------- query
+
+message Query {
+  string collection = 1;
+  optional Expr filter = 2;
+  optional FieldList select = 3;
+  repeated Include include = 4;
+  repeated SortKey sort = 5;
+  optional uint64 skip = 6;
+  optional uint64 limit = 7;
+}
+
+message FieldList {
+  repeated string fields = 1;
+}
+
+message Include {
+  string relation = 1;
+  optional string alias = 2;
+  optional Expr filter = 3;
+  optional FieldList select = 4;
+  repeated SortKey sort = 5;
+  optional uint64 limit = 6;
+  bool required = 7;
+  repeated Include include = 8;
+  JoinStrategy strategy = 9;
+}
+
+enum JoinStrategy {
+  JOIN_STRATEGY_AUTO = 0;
+  JOIN_STRATEGY_LOOKUP = 1;
+  JOIN_STRATEGY_BATCH = 2;
+}
+
+message SortKey {
+  string field = 1;
+  bool desc = 2;
+}
+
+message Expr {
+  oneof kind {
+    ExprList and = 1;
+    ExprList or = 2;
+    Expr not = 3;
+    Cmp cmp = 4;
+    InList in = 5;
+    InList nin = 6;
+    Exists exists = 7;
+    string is_null = 8;
+    Regex regex = 9;
+    Quantified any = 10;
+    Quantified all = 11;
+    // Raw MongoDB filter (BSON document) on the current collection.
+    bytes raw = 12;
+  }
+}
+
+message ExprList {
+  repeated Expr exprs = 1;
+}
+
+enum CmpOp {
+  CMP_OP_UNSPECIFIED = 0;
+  CMP_OP_EQ = 1;
+  CMP_OP_NE = 2;
+  CMP_OP_GT = 3;
+  CMP_OP_GTE = 4;
+  CMP_OP_LT = 5;
+  CMP_OP_LTE = 6;
+}
+
+message Cmp {
+  string path = 1;
+  CmpOp op = 2;
+  // BSON `{ "v": <value> }`.
+  bytes value = 3;
+}
+
+message InList {
+  string path = 1;
+  // BSON `{ "v": [<values>] }`.
+  bytes values = 2;
+}
+
+message Exists {
+  string path = 1;
+  bool exists = 2;
+}
+
+message Regex {
+  string path = 1;
+  string pattern = 2;
+  string options = 3;
+}
+
+message Quantified {
+  string relation = 1;
+  optional Expr filter = 2;
+}
+
+// ------------------------------------------------------- data messages
+
+message QueryRequest {
+  Query query = 1;
+}
+
+message QueryResponse {
+  // Raw BSON documents.
+  repeated bytes documents = 1;
+}
+
+message CountRequest {
+  string collection = 1;
+  optional Expr filter = 2;
+}
+
+message CountResponse {
+  uint64 count = 1;
+}
+
+message ExplainResponse {
+  // BSON document.
+  bytes explain = 1;
+}
+
+message WriteRequest {
+  repeated WriteOp ops = 1;
+}
+
+message WriteOp {
+  oneof op {
+    Insert insert = 1;
+    Update update = 2;
+    Delete delete = 3;
+  }
+}
+
+message Insert {
+  string collection = 1;
+  repeated bytes documents = 2;
+}
+
+message Update {
+  string collection = 1;
+  optional Expr filter = 2;
+  // BSON operator update document.
+  bytes update = 3;
+  // Update only the first match (default: all matches).
+  bool single = 4;
+}
+
+message Delete {
+  string collection = 1;
+  optional Expr filter = 2;
+  // Delete only the first match (default: all matches).
+  bool single = 3;
+}
+
+message WriteResponse {
+  // Each a BSON `{ "v": <id> }`.
+  repeated bytes inserted_ids = 1;
+  uint64 matched = 2;
+  uint64 modified = 3;
+  uint64 deleted = 4;
+  repeated CascadeCount cascaded = 5;
+}
+
+message CascadeCount {
+  string collection = 1;
+  uint64 deleted = 2;
+  uint64 nulled = 3;
+}
+
+// ------------------------------------------------------ admin messages
+
+message GetSchemaRequest {}
+
+message GetSchemaResponse {
+  uint64 version = 1;
+  Schema schema = 2;
+}
+
+message ApplySchemaRequest {
+  Schema schema = 1;
+  bool dry_run = 2;
+}
+
+message ApplySchemaResponse {
+  uint64 version = 1;
+  bool changed = 2;
+  bool dry_run = 3;
+  repeated string created_collections = 4;
+  repeated string created_indexes = 5;
+  repeated string dropped_indexes = 6;
+  repeated string validators_updated = 7;
+}
+
+message SchemaHistoryRequest {
+  uint32 limit = 1;
+}
+
+message SchemaHistoryResponse {
+  repeated SchemaVersion versions = 1;
+}
+
+message SchemaVersion {
+  uint64 version = 1;
+  int64 applied_at_ms = 2;
+}
+
+message RebuildEmbedsRequest {}
+
+message RebuildEmbedsResponse {
+  uint64 updated = 1;
+}
+
+message ServerInfoRequest {}
+
+message ServerInfoResponse {
+  string server_version = 1;
+  string mongodb_version = 2;
+  bool transactions = 3;
+  uint64 schema_version = 4;
+}

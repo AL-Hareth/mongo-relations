@@ -1,0 +1,35 @@
+# mongo-relations server configuration.
+# Environment overrides: MR_MONGODB_URI, MR_DATABASE, MR_METADATA_DATABASE,
+# MR_GRPC_ADDR, MR_HTTP_ADDR, MR_AUTH_DISABLED.
+
+[mongodb]
+# A replica set (or sharded cluster) is required for strict integrity,
+# multi-op batches and embed sync.
+uri = "mongodb://127.0.0.1:27017/?replicaSet=rs0"
+database = "app"
+# metadata_database = "app_meta"   # where _mr_* system collections live
+
+[server]
+grpc_addr = "0.0.0.0:50051"
+http_addr = "0.0.0.0:8080"
+# max_body_bytes = 16777216
+# max_grpc_message_bytes = 3145728
+
+[auth]
+# disabled = true   # accept unauthenticated requests as admin (development only)
+
+# Generate the hash with: mongo-relations hash-key <key>
+[[auth.keys]]
+name = "local-admin"
+# sha256("change-me")
+sha256 = "e2186dbdb1bb4193608605e84f33208765b5693b55edd4f730a719a100eeea6f"
+role = "admin"   # read | read_write | admin
+
+[engine]
+# semi_join_max_keys = 10000   # beyond this a relational filter uses $lookup
+# chunk_size = 500             # documents per streamed result chunk
+# max_include_depth = 8
+# max_txn_attempts = 10
+# lock_ttl_secs = 3600
+# max_cascade_depth = 32
+# stats_refresh_secs = 60

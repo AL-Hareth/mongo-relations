@@ -1,0 +1,18 @@
+[package]
+name = "mr-client"
+description = "Rust client for mongo-relations with a typed query builder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mr-core.workspace = true
+mr-proto.workspace = true
+bson.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+tonic.workspace = true
+
+[lints]
+workspace = true

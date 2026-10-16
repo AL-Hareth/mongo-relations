@@ -1,0 +1,21 @@
+[package]
+name = "mr-proto"
+description = "Protobuf/gRPC definitions for mongo-relations and conversions to the core IR"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mr-core.workspace = true
+bson.workspace = true
+prost.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true
+protoc-bin-vendored.workspace = true
+
+[lints]
+workspace = true

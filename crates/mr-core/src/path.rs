@@ -68,13 +68,17 @@ pub fn paths_overlap(a: &str, b: &str) -> bool {
     a == b || prefix(a, b) || prefix(b, a)
 }
 
-/// A hashable, totally ordered representation of a key value, used to group
-/// and deduplicate join keys. Uses the canonical Extended JSON encoding so
-/// that e.g. `Int32(1)` and `Int64(1)` stay distinct like in BSON.
+/// A hashable representation of a key value, used to group and deduplicate
+/// join keys. Numbers that MongoDB considers equal (`Int32(1)`, `Int64(1)`,
+/// `Double(1.0)`) share a representation, matching `$in` / `$lookup` semantics.
 pub fn key_repr(v: &Bson) -> String {
     match v {
         Bson::ObjectId(o) => o.to_hex(),
         Bson::String(s) => format!("s:{s}"),
+        Bson::Int32(n) => format!("n:{n}"),
+        Bson::Int64(n) => format!("n:{n}"),
+        Bson::Double(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => format!("n:{}", *f as i64),
+        Bson::Double(f) => format!("n:{f}"),
         other => other.clone().into_canonical_extjson().to_string(),
     }
 }
@@ -101,6 +105,16 @@ mod tests {
         assert!(paths_overlap("a.b", "a.b"));
         assert!(!paths_overlap("a.b", "a.bc"));
         assert!(!paths_overlap("ab", "a"));
+    }
+
+    #[test]
+    fn numeric_keys_compare_like_mongodb() {
+        assert_eq!(key_repr(&Bson::Int32(1)), key_repr(&Bson::Int64(1)));
+        assert_eq!(key_repr(&Bson::Int32(1)), key_repr(&Bson::Double(1.0)));
+        assert_ne!(
+            key_repr(&Bson::Int32(1)),
+            key_repr(&Bson::String("1".into()))
+        );
     }
 
     #[test]

@@ -96,9 +96,16 @@ pub struct Embed {
 
 impl Embed {
     /// Build the snapshot stored on the owner from a target document.
+    ///
+    /// Snapshots always carry the target's `_id`, so copies can be found
+    /// (and removed) when the target is deleted, even though delete events
+    /// only carry the `_id`.
     pub fn snapshot(&self, target_doc: &Document) -> Document {
         let mut out = Document::new();
-        if self.array {
+        if let Some(id) = target_doc.get(ID_FIELD) {
+            out.insert(ID_FIELD, id.clone());
+        }
+        if self.array && self.target_field != ID_FIELD {
             if let Some(k) = target_doc.get(&self.target_field) {
                 out.insert(self.target_field.clone(), k.clone());
             }
@@ -263,191 +270,192 @@ impl Catalog {
                         declared_by: vec![qual.clone()],
                     };
 
-                let (kind, cardinality, path, owned): (_, _, JoinPath, Option<FkRef>) =
-                    match &r.kind {
-                        RelationKind::BelongsTo {
+                let (kind, cardinality, path, owned): (_, _, JoinPath, Option<FkRef>) = match &r
+                    .kind
+                {
+                    RelationKind::BelongsTo {
+                        foreign_key,
+                        references,
+                    } => {
+                        check_path("foreign key", foreign_key)?;
+                        check_key_field(target, references, &qual)?;
+                        check_fk_shape(c, foreign_key, false, &qual)?;
+                        add(draft(
+                            &c.name,
                             foreign_key,
+                            false,
+                            &target.name,
                             references,
-                        } => {
-                            check_path("foreign key", foreign_key)?;
+                            OnDelete::Restrict,
+                        ))?;
+                        (
+                            RelationKindTag::BelongsTo,
+                            Cardinality::One,
+                            vec![Hop {
+                                from: c.name.clone(),
+                                from_field: foreign_key.clone(),
+                                from_array: false,
+                                to: target.name.clone(),
+                                to_field: references.clone(),
+                                to_array: false,
+                            }],
+                            Some((c.name.clone(), foreign_key.clone())),
+                        )
+                    }
+                    RelationKind::HasOne {
+                        foreign_key,
+                        references,
+                    }
+                    | RelationKind::HasMany {
+                        foreign_key,
+                        references,
+                    } => {
+                        check_path("foreign key", foreign_key)?;
+                        check_key_field(c, references, &qual)?;
+                        check_fk_shape(target, foreign_key, false, &qual)?;
+                        add(draft(
+                            &target.name,
+                            foreign_key,
+                            false,
+                            &c.name,
+                            references,
+                            OnDelete::Restrict,
+                        ))?;
+                        let (k, card) = if matches!(r.kind, RelationKind::HasOne { .. }) {
+                            (RelationKindTag::HasOne, Cardinality::One)
+                        } else {
+                            (RelationKindTag::HasMany, Cardinality::Many)
+                        };
+                        (
+                            k,
+                            card,
+                            vec![Hop {
+                                from: c.name.clone(),
+                                from_field: references.clone(),
+                                from_array: false,
+                                to: target.name.clone(),
+                                to_field: foreign_key.clone(),
+                                to_array: false,
+                            }],
+                            None,
+                        )
+                    }
+                    RelationKind::ManyToMany { via, references } => match via {
+                        Via::Local(field) => {
+                            check_path("foreign key", field)?;
                             check_key_field(target, references, &qual)?;
-                            check_fk_shape(c, foreign_key, false, &qual)?;
+                            check_fk_shape(c, field, true, &qual)?;
                             add(draft(
                                 &c.name,
-                                foreign_key,
-                                false,
+                                field,
+                                true,
                                 &target.name,
                                 references,
                                 OnDelete::Restrict,
                             ))?;
                             (
-                                RelationKindTag::BelongsTo,
-                                Cardinality::One,
+                                RelationKindTag::ManyToMany,
+                                Cardinality::Many,
                                 vec![Hop {
                                     from: c.name.clone(),
-                                    from_field: foreign_key.clone(),
-                                    from_array: false,
+                                    from_field: field.clone(),
+                                    from_array: true,
                                     to: target.name.clone(),
                                     to_field: references.clone(),
                                     to_array: false,
                                 }],
-                                Some((c.name.clone(), foreign_key.clone())),
+                                Some((c.name.clone(), field.clone())),
                             )
                         }
-                        RelationKind::HasOne {
-                            foreign_key,
-                            references,
-                        }
-                        | RelationKind::HasMany {
-                            foreign_key,
-                            references,
-                        } => {
-                            check_path("foreign key", foreign_key)?;
+                        Via::Remote(field) => {
+                            check_path("foreign key", field)?;
                             check_key_field(c, references, &qual)?;
-                            check_fk_shape(target, foreign_key, false, &qual)?;
+                            check_fk_shape(target, field, true, &qual)?;
                             add(draft(
                                 &target.name,
-                                foreign_key,
-                                false,
+                                field,
+                                true,
                                 &c.name,
                                 references,
                                 OnDelete::Restrict,
                             ))?;
-                            let (k, card) = if matches!(r.kind, RelationKind::HasOne { .. }) {
-                                (RelationKindTag::HasOne, Cardinality::One)
-                            } else {
-                                (RelationKindTag::HasMany, Cardinality::Many)
-                            };
                             (
-                                k,
-                                card,
+                                RelationKindTag::ManyToMany,
+                                Cardinality::Many,
                                 vec![Hop {
                                     from: c.name.clone(),
                                     from_field: references.clone(),
                                     from_array: false,
                                     to: target.name.clone(),
-                                    to_field: foreign_key.clone(),
-                                    to_array: false,
+                                    to_field: field.clone(),
+                                    to_array: true,
                                 }],
                                 None,
                             )
                         }
-                        RelationKind::ManyToMany { via, references } => match via {
-                            Via::Local(field) => {
-                                check_path("foreign key", field)?;
-                                check_key_field(target, references, &qual)?;
-                                check_fk_shape(c, field, true, &qual)?;
-                                add(draft(
-                                    &c.name,
-                                    field,
-                                    true,
-                                    &target.name,
-                                    references,
-                                    OnDelete::Restrict,
-                                ))?;
-                                (
-                                    RelationKindTag::ManyToMany,
-                                    Cardinality::Many,
-                                    vec![Hop {
-                                        from: c.name.clone(),
-                                        from_field: field.clone(),
-                                        from_array: true,
-                                        to: target.name.clone(),
-                                        to_field: references.clone(),
-                                        to_array: false,
-                                    }],
-                                    Some((c.name.clone(), field.clone())),
-                                )
+                        Via::Junction(j) => {
+                            if references != ID_FIELD {
+                                return Err(schema_err!(
+                                    "relation `{qual}`: junction relations always reference `_id`"
+                                ));
                             }
-                            Via::Remote(field) => {
-                                check_path("foreign key", field)?;
-                                check_key_field(c, references, &qual)?;
-                                check_fk_shape(target, field, true, &qual)?;
-                                add(draft(
-                                    &target.name,
-                                    field,
-                                    true,
-                                    &c.name,
-                                    references,
-                                    OnDelete::Restrict,
-                                ))?;
-                                (
-                                    RelationKindTag::ManyToMany,
-                                    Cardinality::Many,
-                                    vec![Hop {
+                            let jc = schema.collection(&j.collection).ok_or_else(|| {
+                                schema_err!(
+                                    "relation `{qual}` uses unknown junction collection `{}`",
+                                    j.collection
+                                )
+                            })?;
+                            check_path("junction key", &j.local_key)?;
+                            check_path("junction key", &j.target_key)?;
+                            if j.local_key == j.target_key {
+                                return Err(schema_err!(
+                                    "relation `{qual}`: junction keys must differ"
+                                ));
+                            }
+                            check_fk_shape(jc, &j.local_key, false, &qual)?;
+                            check_fk_shape(jc, &j.target_key, false, &qual)?;
+                            add(draft(
+                                &jc.name,
+                                &j.local_key,
+                                false,
+                                &c.name,
+                                ID_FIELD,
+                                OnDelete::Cascade,
+                            ))?;
+                            add(draft(
+                                &jc.name,
+                                &j.target_key,
+                                false,
+                                &target.name,
+                                ID_FIELD,
+                                OnDelete::Cascade,
+                            ))?;
+                            (
+                                RelationKindTag::ManyToMany,
+                                Cardinality::Many,
+                                vec![
+                                    Hop {
                                         from: c.name.clone(),
-                                        from_field: references.clone(),
+                                        from_field: ID_FIELD.into(),
+                                        from_array: false,
+                                        to: jc.name.clone(),
+                                        to_field: j.local_key.clone(),
+                                        to_array: false,
+                                    },
+                                    Hop {
+                                        from: jc.name.clone(),
+                                        from_field: j.target_key.clone(),
                                         from_array: false,
                                         to: target.name.clone(),
-                                        to_field: field.clone(),
-                                        to_array: true,
-                                    }],
-                                    None,
-                                )
-                            }
-                            Via::Junction(j) => {
-                                if references != ID_FIELD {
-                                    return Err(schema_err!(
-                                        "relation `{qual}`: junction relations always reference `_id`"
-                                    ));
-                                }
-                                let jc = schema.collection(&j.collection).ok_or_else(|| {
-                                    schema_err!(
-                                        "relation `{qual}` uses unknown junction collection `{}`",
-                                        j.collection
-                                    )
-                                })?;
-                                check_path("junction key", &j.local_key)?;
-                                check_path("junction key", &j.target_key)?;
-                                if j.local_key == j.target_key {
-                                    return Err(schema_err!(
-                                        "relation `{qual}`: junction keys must differ"
-                                    ));
-                                }
-                                check_fk_shape(jc, &j.local_key, false, &qual)?;
-                                check_fk_shape(jc, &j.target_key, false, &qual)?;
-                                add(draft(
-                                    &jc.name,
-                                    &j.local_key,
-                                    false,
-                                    &c.name,
-                                    ID_FIELD,
-                                    OnDelete::Cascade,
-                                ))?;
-                                add(draft(
-                                    &jc.name,
-                                    &j.target_key,
-                                    false,
-                                    &target.name,
-                                    ID_FIELD,
-                                    OnDelete::Cascade,
-                                ))?;
-                                (
-                                    RelationKindTag::ManyToMany,
-                                    Cardinality::Many,
-                                    vec![
-                                        Hop {
-                                            from: c.name.clone(),
-                                            from_field: ID_FIELD.into(),
-                                            from_array: false,
-                                            to: jc.name.clone(),
-                                            to_field: j.local_key.clone(),
-                                            to_array: false,
-                                        },
-                                        Hop {
-                                            from: jc.name.clone(),
-                                            from_field: j.target_key.clone(),
-                                            from_array: false,
-                                            to: target.name.clone(),
-                                            to_field: ID_FIELD.into(),
-                                            to_array: false,
-                                        },
-                                    ],
-                                    None,
-                                )
-                            }
-                        },
-                    };
+                                        to_field: ID_FIELD.into(),
+                                        to_array: false,
+                                    },
+                                ],
+                                None,
+                            )
+                        }
+                    },
+                };
 
                 let embed = match &r.embed {
                     None => None,
@@ -524,6 +532,25 @@ impl Catalog {
                     },
                     owned,
                 ));
+            }
+        }
+
+        // Embeds must not copy another embed's snapshot: chained copies would
+        // make the sync worker's own writes trigger further syncs.
+        for e in &embeds {
+            for other in embeds.iter().filter(|o| o.owner == e.target) {
+                if e.fields
+                    .iter()
+                    .any(|f| crate::path::paths_overlap(f, &other.into))
+                {
+                    return Err(schema_err!(
+                        "relation `{}.{}`: embed copies `{}.{}`, which is itself an embed",
+                        e.owner,
+                        e.relation,
+                        e.target,
+                        other.into
+                    ));
+                }
             }
         }
 
@@ -683,6 +710,9 @@ impl Catalog {
         };
         for c in self.outbound(collection) {
             push(&c.field);
+        }
+        for e in self.embeds_on(collection) {
+            push(&format!("{}.{ID_FIELD}", e.into));
         }
         for coll in self.collections.values() {
             for rel in coll.relations.values() {

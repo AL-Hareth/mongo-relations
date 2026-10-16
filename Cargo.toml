@@ -1,0 +1,55 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/AL-Hareth/mongo-relations"
+rust-version = "1.85"
+
+[workspace.dependencies]
+mr-core = { path = "crates/mr-core" }
+mr-engine = { path = "crates/mr-engine" }
+mr-proto = { path = "crates/mr-proto" }
+mr-client = { path = "crates/mr-client" }
+
+anyhow = "1"
+arc-swap = "1.7"
+async-trait = "0.1"
+axum = "0.8"
+bson = { version = "3.1", features = ["serde", "serde_json-1", "uuid-1"] }
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
+futures = "0.3"
+hex = "0.4"
+indexmap = { version = "2", features = ["serde"] }
+mongodb = { version = "3.9", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls", "dns-resolver"] }
+prost = "0.14"
+rand = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+toml = "0.9"
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+protoc-bin-vendored = "3"
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+http = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

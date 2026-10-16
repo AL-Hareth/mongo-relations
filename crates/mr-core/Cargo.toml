@@ -1,0 +1,17 @@
+[package]
+name = "mr-core"
+description = "Core schema model, query IR, planner and MongoDB compiler for mongo-relations"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bson.workspace = true
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

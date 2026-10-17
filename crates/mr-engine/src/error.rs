@@ -21,7 +21,7 @@ pub enum Error {
     #[error(transparent)]
     Core(#[from] mr_core::Error),
 
-    #[error("mongodb: {0}")]
+    #[error("{}", describe_mongo(.0))]
     Mongo(#[from] mongodb::error::Error),
 
     #[error(
@@ -143,4 +143,43 @@ pub(crate) fn mongo_code(e: &mongodb::error::Error) -> Option<i32> {
             .or_else(|| im.write_concern_error.as_ref().map(|w| w.code)),
         _ => None,
     }
+}
+
+/// The server's own message for a driver error (the driver's `Display`
+/// includes internal debug structures).
+fn mongo_message(e: &mongodb::error::Error) -> String {
+    use mongodb::error::{ErrorKind as MK, WriteFailure};
+    match e.kind.as_ref() {
+        MK::Command(c) => c.message.clone(),
+        MK::Write(WriteFailure::WriteError(w)) => w.message.clone(),
+        MK::Write(WriteFailure::WriteConcernError(w)) => w.message.clone(),
+        MK::InsertMany(im) => im
+            .write_errors
+            .as_ref()
+            .and_then(|w| w.first().map(|w| w.message.clone()))
+            .or_else(|| im.write_concern_error.as_ref().map(|w| w.message.clone()))
+            .unwrap_or_else(|| e.to_string()),
+        _ => e.to_string(),
+    }
+}
+
+/// A readable description of a driver error. Duplicate-key errors
+/// (`E11000 ... collection: db.coll index: name dup key: { f: v }`) become
+/// a unique-constraint message.
+fn describe_mongo(e: &mongodb::error::Error) -> String {
+    let msg = mongo_message(e);
+    if mongo_code(e) == Some(11000) {
+        let after = |marker: &str| msg.split_once(marker).map(|(_, rest)| rest.trim());
+        let collection = after("collection: ")
+            .and_then(|r| r.split_whitespace().next())
+            .map(|c| c.split_once('.').map_or(c, |(_, coll)| coll));
+        let index = after(" index: ").and_then(|r| r.split_whitespace().next());
+        if let (Some(c), Some(i), Some(key)) = (collection, index, after("dup key: ")) {
+            return format!(
+                "unique constraint violated: `{c}` already has a document with {key} (index `{i}`)"
+            );
+        }
+        return format!("unique constraint violated: {msg}");
+    }
+    format!("mongodb: {msg}")
 }

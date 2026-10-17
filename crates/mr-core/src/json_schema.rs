@@ -29,7 +29,8 @@ fn object_schema(fields: &[FieldDef]) -> Document {
     out
 }
 
-fn bson_types(ty: &FieldType) -> Option<Vec<&'static str>> {
+/// BSON type aliases for a declared type (`None` for `any`).
+pub(crate) fn bson_types(ty: &FieldType) -> Option<Vec<&'static str>> {
     Some(match ty {
         FieldType::ObjectId => vec!["objectId"],
         FieldType::String => vec!["string"],

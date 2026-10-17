@@ -377,3 +377,56 @@ async fn intent_locks_prevent_orphans_under_concurrency() {
         assert_eq!(del.is_ok(), !user_exists);
     }
 }
+
+/// Optional unique fields behave like SQL UNIQUE: many documents may lack a
+/// value, duplicates of real values are rejected with a readable error, and
+/// re-applying a schema upgrades an index whose definition changed.
+#[tokio::test]
+async fn optional_unique_fields_allow_missing_values() {
+    use mr_engine::mr_core::schema::{CollectionDef, FieldDef, FieldType, Schema};
+    let Some(t) = engine().await else { return };
+    let e = &t.engine;
+    let schema = Schema {
+        collections: vec![CollectionDef {
+            name: "people".into(),
+            fields: vec![FieldDef::new("email", FieldType::String).unique()],
+            relations: vec![],
+        }],
+    };
+    // Simulate an index created before partial unique indexes existed.
+    e.database()
+        .collection::<bson::Document>("people")
+        .create_index(
+            mongodb::IndexModel::builder()
+                .keys(doc! { "email": 1 })
+                .options(
+                    mongodb::options::IndexOptions::builder()
+                        .name("mr_uniq_email".to_string())
+                        .unique(true)
+                        .build(),
+                )
+                .build(),
+        )
+        .await
+        .unwrap();
+    let r = e.apply_schema(schema, false).await.unwrap();
+    assert_eq!(r.dropped_indexes, vec!["people.mr_uniq_email"]);
+    assert_eq!(r.created_indexes, vec!["people.mr_uniq_email"]);
+
+    e.insert(
+        "people",
+        vec![doc! { "n": 1 }, doc! { "n": 2 }, doc! { "email": "a@x.io" }],
+    )
+    .await
+    .unwrap();
+    let err = e
+        .insert("people", vec![doc! { "email": "a@x.io" }])
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::FailedPrecondition);
+    assert_eq!(
+        err.to_string(),
+        "unique constraint violated: `people` already has a document with \
+         { email: \"a@x.io\" } (index `mr_uniq_email`)"
+    );
+}

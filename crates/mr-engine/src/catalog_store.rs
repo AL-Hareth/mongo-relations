@@ -13,6 +13,7 @@ use futures::{StreamExt, TryStreamExt};
 use mongodb::IndexModel;
 use mongodb::options::IndexOptions;
 use mr_core::Catalog;
+use mr_core::catalog::IndexSpec;
 use mr_core::schema::Schema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -166,20 +167,36 @@ impl Engine {
 
             let coll = db.collection::<Document>(name);
             let wanted = catalog.indexes(name)?;
-            let have: Vec<String> = if existing.contains(name) {
-                coll.list_index_names().await?
+            let have: Vec<IndexModel> = if existing.contains(name) {
+                coll.list_indexes().await?.try_collect().await?
             } else {
                 vec![]
             };
+            let index_name = |m: &IndexModel| {
+                m.options
+                    .as_ref()
+                    .and_then(|o| o.name.clone())
+                    .unwrap_or_default()
+            };
             for idx in &wanted {
-                if have.contains(&idx.name) {
-                    continue;
+                match have.iter().find(|m| index_name(m) == idx.name) {
+                    Some(m) if same_index(m, idx) => continue,
+                    // Same name, different definition (e.g. a unique index
+                    // that is now partial): rebuild it.
+                    Some(_) => {
+                        report.dropped_indexes.push(format!("{name}.{}", idx.name));
+                        if !dry_run {
+                            coll.drop_index(&idx.name).await?;
+                        }
+                    }
+                    None => {}
                 }
                 report.created_indexes.push(format!("{name}.{}", idx.name));
                 if !dry_run {
                     let opts = IndexOptions::builder()
                         .name(idx.name.clone())
                         .unique(idx.unique)
+                        .partial_filter_expression(idx.partial.clone())
                         .build();
                     coll.create_index(
                         IndexModel::builder()
@@ -190,11 +207,15 @@ impl Engine {
                     .await?;
                 }
             }
-            for name_have in have.iter().filter(|n| n.starts_with(INDEX_PREFIX)) {
-                if !wanted.iter().any(|w| &w.name == name_have) {
+            for name_have in have
+                .iter()
+                .map(index_name)
+                .filter(|n| n.starts_with(INDEX_PREFIX))
+            {
+                if !wanted.iter().any(|w| w.name == name_have) {
                     report.dropped_indexes.push(format!("{name}.{name_have}"));
                     if !dry_run {
-                        coll.drop_index(name_have).await?;
+                        coll.drop_index(&name_have).await?;
                     }
                 }
             }
@@ -252,6 +273,14 @@ impl Engine {
         tracing::info!(version, "schema applied");
         Ok(report)
     }
+}
+
+/// Whether an existing index matches the layer's definition.
+fn same_index(have: &IndexModel, want: &IndexSpec) -> bool {
+    let opts = have.options.as_ref();
+    have.keys == want.keys
+        && opts.and_then(|o| o.unique).unwrap_or(false) == want.unique
+        && opts.and_then(|o| o.partial_filter_expression.clone()) == want.partial
 }
 
 /// Follow `_mr_schema` so that schema changes applied through any server

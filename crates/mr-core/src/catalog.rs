@@ -124,6 +124,8 @@ pub struct IndexSpec {
     pub name: String,
     pub keys: Document,
     pub unique: bool,
+    /// Only index documents matching this filter (`partialFilterExpression`).
+    pub partial: Option<Document>,
 }
 
 #[derive(Debug, Clone)]
@@ -706,6 +708,7 @@ impl Catalog {
                 name: format!("mr_fk_{field}"),
                 keys: doc! { field: 1 },
                 unique: false,
+                partial: None,
             });
         };
         for c in self.outbound(collection) {
@@ -735,10 +738,22 @@ fn collect_unique_indexes(fields: &[FieldDef], prefix: &str, out: &mut Vec<Index
             format!("{prefix}.{}", f.name)
         };
         if f.unique {
+            // Like SQL UNIQUE, any number of documents may lack a value:
+            // a plain unique index would treat every missing field as a
+            // duplicate `null`, so optional fields get a partial index over
+            // documents that hold a value of the declared type.
+            let partial = (!f.required || f.nullable).then(|| {
+                let cond = match crate::json_schema::bson_types(&f.ty) {
+                    Some(types) => doc! { "$type": types },
+                    None => doc! { "$exists": true },
+                };
+                doc! { path.clone(): cond }
+            });
             out.push(IndexSpec {
                 name: format!("mr_uniq_{path}"),
                 keys: doc! { path.clone(): 1 },
                 unique: true,
+                partial,
             });
         }
         if let FieldType::Object(inner) = &f.ty {
@@ -1027,6 +1042,26 @@ mod tests {
         assert_eq!(s, back);
         assert!(json.contains("\"kind\": \"belongs_to\""));
         assert!(json.contains("\"local\": \"tag_ids\""));
+    }
+
+    #[test]
+    fn optional_unique_fields_get_partial_indexes() {
+        let mut s = blog();
+        s.collections[0]
+            .fields
+            .push(FieldDef::new("handle", FieldType::String).unique());
+        let cat = Catalog::new(s, 1).unwrap();
+        let idx = cat.indexes("users").unwrap();
+        let email = idx.iter().find(|i| i.name == "mr_uniq_email").unwrap();
+        assert_eq!(
+            email.partial, None,
+            "required fields need no partial filter"
+        );
+        let handle = idx.iter().find(|i| i.name == "mr_uniq_handle").unwrap();
+        assert_eq!(
+            handle.partial,
+            Some(doc! { "handle": { "$type": ["string"] } })
+        );
     }
 
     #[test]

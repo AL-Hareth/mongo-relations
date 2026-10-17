@@ -90,11 +90,24 @@ impl Engine {
             let version = latest.version as u64;
             if version > self.catalog().version() {
                 let catalog = Catalog::new(latest.schema, version)?;
-                self.inner.catalog.store(Arc::new(catalog));
+                self.set_catalog(catalog);
                 tracing::info!(version, "catalog loaded");
             }
         }
         Ok(self.catalog())
+    }
+
+    /// When a schema version was applied.
+    pub(crate) async fn applied_at(&self, version: u64) -> Option<bson::DateTime> {
+        let doc = self
+            .inner
+            .meta
+            .collection::<Document>(SCHEMA_COLL)
+            .find_one(doc! { "_id": version as i64 })
+            .projection(doc! { "applied_at": 1 })
+            .await
+            .ok()??;
+        doc.get_datetime("applied_at").ok().copied()
     }
 
     /// Stored schema versions, newest first.
@@ -246,7 +259,7 @@ impl Engine {
 
         if dry_run || !changed {
             if !dry_run && self.catalog().version() < version {
-                self.inner.catalog.store(Arc::new(catalog));
+                self.set_catalog(catalog);
             }
             return Ok(report);
         }
@@ -269,7 +282,7 @@ impl Engine {
             }
             return Err(e.into());
         }
-        self.inner.catalog.store(Arc::new(catalog));
+        self.set_catalog(catalog);
         tracing::info!(version, "schema applied");
         Ok(report)
     }

@@ -157,3 +157,47 @@ async fn rebuild_repairs_stale_snapshots() {
         "Robert"
     );
 }
+
+/// A change made right after applying a schema that adds an embed must not
+/// be lost while the sync worker is still (re)starting its watchers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changes_right_after_adding_an_embed_are_not_lost() {
+    let Some(t) = engine().await else { return };
+    let e = t.engine.clone();
+    let mut without = blog_schema();
+    for c in &mut without.collections {
+        for r in &mut c.relations {
+            r.embed = None;
+        }
+    }
+    e.apply_schema(without, false).await.unwrap();
+    let alice = bson::oid::ObjectId::new();
+    e.insert(
+        "users",
+        vec![doc! { "_id": alice, "email": "a@x.io", "name": "Alice" }],
+    )
+    .await
+    .unwrap();
+    e.insert("posts", vec![doc! { "title": "t", "author_id": alice }])
+        .await
+        .unwrap();
+    let bg = e.spawn_background();
+
+    e.apply_schema(blog_schema(), false).await.unwrap();
+    // No pause: the watcher for `users` may not be running yet.
+    e.database()
+        .collection::<Document>("users")
+        .update_one(doc! { "_id": alice }, doc! { "$set": { "name": "Alicia" } })
+        .await
+        .unwrap();
+    let posts = e.database().collection::<Document>("posts");
+    eventually("the early rename to propagate", || async {
+        posts
+            .count_documents(doc! { "author_snapshot.name": "Alicia" })
+            .await
+            .unwrap()
+            == 1
+    })
+    .await;
+    bg.shutdown().await;
+}

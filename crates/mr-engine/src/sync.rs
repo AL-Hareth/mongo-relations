@@ -33,7 +33,9 @@ const TOKEN_SAVE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Supervisor: (re)starts watchers whenever the catalog version changes.
 pub(crate) async fn run(engine: Engine, mut shutdown: watch::Receiver<bool>) {
+    let mut versions = engine.inner.catalog_version.subscribe();
     loop {
+        versions.mark_unchanged();
         let catalog = engine.catalog();
         let version = catalog.version();
         let watched: BTreeSet<String> = catalog
@@ -41,6 +43,17 @@ pub(crate) async fn run(engine: Engine, mut shutdown: watch::Receiver<bool>) {
             .iter()
             .flat_map(|e| [e.target.clone(), e.owner.clone()])
             .collect();
+        // A collection watched for the first time starts from the moment
+        // this schema version was applied, so changes made between the
+        // apply and the watcher starting are not missed.
+        let start_at = if watched.is_empty() {
+            None
+        } else {
+            engine.applied_at(version).await.map(|t| bson::Timestamp {
+                time: (t.timestamp_millis() / 1000).max(0) as u32,
+                increment: 0,
+            })
+        };
         let (stop_tx, stop_rx) = watch::channel(false);
         let tasks: Vec<_> = watched
             .into_iter()
@@ -49,6 +62,7 @@ pub(crate) async fn run(engine: Engine, mut shutdown: watch::Receiver<bool>) {
                     engine.clone(),
                     c,
                     catalog.clone(),
+                    start_at,
                     stop_rx.clone(),
                 ))
             })
@@ -56,21 +70,16 @@ pub(crate) async fn run(engine: Engine, mut shutdown: watch::Receiver<bool>) {
         if !tasks.is_empty() {
             tracing::info!(version, watchers = tasks.len(), "embed sync started");
         }
-        loop {
-            if crate::sleep_or_shutdown(Duration::from_secs(2), &mut shutdown).await {
-                let _ = stop_tx.send(true);
-                for t in tasks {
-                    let _ = t.await;
-                }
-                return;
-            }
-            if engine.catalog().version() != version {
-                break;
-            }
-        }
+        let stop = tokio::select! {
+            _ = shutdown.wait_for(|s| *s) => true,
+            r = versions.changed() => r.is_err(),
+        };
         let _ = stop_tx.send(true);
         for t in tasks {
             let _ = t.await;
+        }
+        if stop {
+            return;
         }
     }
 }
@@ -79,10 +88,11 @@ async fn watch_collection(
     engine: Engine,
     coll: String,
     catalog: Arc<Catalog>,
+    start_at: Option<bson::Timestamp>,
     mut stop: watch::Receiver<bool>,
 ) {
     loop {
-        match watch_once(&engine, &coll, &catalog, &mut stop).await {
+        match watch_once(&engine, &coll, &catalog, start_at, &mut stop).await {
             Ok(()) => return,
             Err(e) => {
                 tracing::warn!(collection = %coll, error = %e, "embed sync watcher failed; restarting")
@@ -124,34 +134,37 @@ async fn watch_once(
     engine: &Engine,
     coll: &str,
     catalog: &Catalog,
+    start_at: Option<bson::Timestamp>,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<()> {
     let token = load_token(engine, coll).await;
     let filter = doc! { "$match": { "operationType": { "$in": ["insert", "update", "replace", "delete", "invalidate"] } } };
     let collection = engine.inner.db.collection::<Document>(coll);
-    let open = |token: Option<ResumeToken>| {
+    let open = |token: Option<ResumeToken>, start_at: Option<bson::Timestamp>| {
         let mut w = collection
             .watch()
             .pipeline([filter.clone()])
             .full_document(FullDocumentType::UpdateLookup);
         if let Some(t) = token {
             w = w.resume_after(t);
+        } else if let Some(ts) = start_at {
+            w = w.start_at_operation_time(ts);
         }
         w
     };
-    let mut stream = match open(token.clone()).await {
+    let mut stream = match open(token.clone(), start_at).await {
         Ok(s) => s,
-        // History lost / fatal: the token cannot be used any more.
+        // History lost / fatal: the starting point is no longer available.
         Err(e)
-            if token.is_some()
+            if (token.is_some() || start_at.is_some())
                 && matches!(
                     crate::error::mongo_code(&e),
                     Some(286) | Some(280) | Some(260)
                 ) =>
         {
-            tracing::warn!(collection = %coll, "resume token expired; embeds may be stale until rebuilt");
+            tracing::warn!(collection = %coll, "change history no longer available; embeds may be stale until rebuilt");
             save_token(engine, coll, None).await?;
-            open(None).await?
+            open(None, None).await?
         }
         Err(e) => return Err(e.into()),
     };

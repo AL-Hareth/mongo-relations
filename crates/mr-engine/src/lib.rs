@@ -82,6 +82,8 @@ struct Inner {
     db: Database,
     meta: Database,
     catalog: ArcSwap<Catalog>,
+    /// Notifies background tasks when a new catalog version is installed.
+    catalog_version: watch::Sender<u64>,
     stats: stats::StatsCache,
     config: EngineConfig,
     topology: Topology,
@@ -116,6 +118,7 @@ impl Engine {
                 db,
                 meta,
                 catalog: ArcSwap::from_pointee(Catalog::empty()),
+                catalog_version: watch::Sender::new(0),
                 stats: stats::StatsCache::default(),
                 config,
                 topology,
@@ -131,6 +134,13 @@ impl Engine {
     /// The current catalog snapshot.
     pub fn catalog(&self) -> Arc<Catalog> {
         self.inner.catalog.load_full()
+    }
+
+    /// Install a new catalog and notify background tasks.
+    pub(crate) fn set_catalog(&self, catalog: Catalog) {
+        let version = catalog.version();
+        self.inner.catalog.store(Arc::new(catalog));
+        self.inner.catalog_version.send_replace(version);
     }
 
     pub fn database(&self) -> &Database {

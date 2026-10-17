@@ -28,8 +28,9 @@ sync, while undeclared fields stay completely free-form.
 
 ## Quick start
 
-> New here? [docs/getting-started.md](docs/getting-started.md) walks through a complete
-> example — schema, writes, relational queries, cascades and embeds — step by step.
+> **New here?** The [beginner tutorial](docs/tutorial/README.md) teaches everything step
+> by step, no prior database knowledge needed. Experienced users can take the one-page
+> [getting-started guide](docs/getting-started.md).
 
 Requirements: Rust 1.85+ and MongoDB 5.0+ running as a replica set. A
 single-node replica set works fine for development:
@@ -158,7 +159,8 @@ crates/mr-proto   protobuf definitions + conversions
 crates/mr-server  the binary: config, auth, gRPC + HTTP front-ends
 crates/mr-client  Rust client with the typed builder API
 docs/ARCHITECTURE.md  design and decision log
-docs/getting-started.md  step-by-step tutorial
+docs/getting-started.md  one-page walkthrough
+docs/tutorial/  beginner tutorial (9 chapters)
 ```
 
 ## Development

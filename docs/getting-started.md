@@ -8,6 +8,9 @@ and denormalized copies at work.
 Every command and response below comes from a real run against MongoDB 7.0.
 Your generated `_id` values will differ.
 
+> New to databases or relations? The [beginner tutorial](tutorial/README.md)
+> covers the same ideas more slowly, one concept per chapter.
+
 **Contents**
 
 1. [Prerequisites](#1-prerequisites)
